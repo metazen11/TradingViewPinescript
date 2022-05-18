@@ -1,8 +1,8 @@
 //(c) Wunderbit Trading
 // 
 //@version=4
-//Customizable MACD Strategy altered by MZ
-//  
+// Customizable MACD Strategy altered by MZ
+// Tip Jar : Eth/Bnb (etc) 0x73d57D5d9A7A0dBC83Ac500f84bf0E9B261eDF75
 // Primarily For use on Wunderbit but can be used for Trading
 // Use on 1 min chart and use drop down to select higher time frame
 // 1 min chart will make sure that signal is made 1 minute after confirmation

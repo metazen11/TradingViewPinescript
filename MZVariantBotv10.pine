@@ -3,6 +3,11 @@
 // Author : Mauricio Zuniga
 // (c) 2022  
 // In progress = please do not share 
+// Tip Jar : Eth/Bnb (etc) 0x73d57D5d9A7A0dBC83Ac500f84bf0E9B261eDF75
+// Primarily For use on Wunderbit but can be used for Trading
+// Use on 1 min chart and use drop down to select higher time frame
+// 1 min chart will make sure that signal is made 1 minute after confirmation
+
 
 strategy(title="Variant Wunderbit Bot EMA strategy v1.0"
          , shorttitle="Variant Bot v1.0"
