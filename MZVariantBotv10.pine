@@ -1,0 +1,207 @@
+// Multiple Variant strategy
+// @version=5
+// Author : Mauricio Zuniga
+// (c) 2022  
+// In progress = please do not share 
+
+strategy(title="Variant Wunderbit Bot EMA strategy v1.0"
+         , shorttitle="Variant Bot v1.0"
+         , overlay=true
+         , process_orders_on_close=true
+         , calc_on_every_tick = true
+         , initial_capital=10000
+         , default_qty_value=100
+         , default_qty_type=strategy.percent_of_equity)
+
+
+//variant function for various calculations on different emas
+variant(type, src, len, offSig, offALMA) =>
+    v1 = ta.sma(src, len)                                                  // Simple
+    v2 = ta.ema(src, len)                                                  // Exponential
+    v3 = 2 * v2 - ta.ema(v2, len)                                          // Double Exponential
+    v4 = 3 * (v2 - ta.ema(v2, len)) + ta.ema(ta.ema(v2, len), len)               // Triple Exponential
+    v5 = ta.wma(src, len)                                                  // Weighted
+    v6 = ta.vwma(src, len)                                                 // Volume Weighted
+    v7 = 0.0
+    v7 := na(v7[1]) ? ta.sma(src, len) : (v7[1] * (len - 1) + src) / len    // Smoothed
+    v8 = ta.wma(2 * ta.wma(src, len / 2) - ta.wma(src, len), math.round(math.sqrt(len)))   // Hull
+    v9 = ta.linreg(src, len, offSig)                                       // Least Squares
+    v10 = ta.alma(src, len, offALMA, offSig)                               // Arnaud Legoux
+    v11 = ta.sma(v1,len)                                                   // Triangular (extreme smooth)
+    // SuperSmoother filter
+    // © 2013  John F. Ehlers
+    a1 = math.exp(-1.414*3.14159 / len)
+    b1 = 2*a1*math.cos(1.414*3.14159 / len)
+    c2 = b1
+    c3 = (-a1)*a1
+    c1 = 1 - c2 - c3
+    v12 = 0.0
+    v12 := c1*(src + nz(src[1])) / 2 + c2*nz(v12[1]) + c3*nz(v12[2])
+    type=="EMA"?v2 : type=="DEMA"?v3 : type=="TEMA"?v4 : type=="WMA"?v5 : type=="VWMA"?v6 : type=="SMMA"?v7 : type=="HullMA"?v8 : type=="LSMA"?v9 : type=="ALMA"?v10 : type=="TMA"?v11: type=="SSMA"?v12: v1
+
+
+
+openlongcomment = "ENTER-LONG_KUCOIN_FTM3S-USDT_FTM3S-4EMA_1M_67bc9d4f9994e5b"
+closelongcomment = "WWC" //let wunderbit close your strategy with a trailing profit stop instead of here
+
+//closelongcomment = "54f81b53_EXIT-LONG_KUCOIN_FTM3L/USDT_54f81b53-FTML3L-BOT_1M"
+
+res = input.timeframe(title = "resoVar", defval = '15')
+//TLineEMA = input.int(8, minval=1, title="Trigger Line") // not used
+ShortEMA = input.int(13, minval=1, title="Short EMA") //important parameter
+basisTypeShort   = input.string(defval = "TEMA", title = "Short MA Type: ", options=["SMA", "EMA", "DEMA", "TEMA", "WMA", "VWMA", "SMMA", "HullMA", "LSMA", "ALMA", "SSMA", "TMA"])
+
+MedEMA   = input.int(21, minval=1, title="Medium EMA") // not used much
+LongEMA  = input.int(34, minval=1, title="Long EMA") 
+basisTypeLong   = input.string(defval = "EMA", title = "Long MA Type: ", options=["SMA", "EMA", "DEMA", "TEMA", "WMA", "VWMA", "SMMA", "HullMA", "LSMA", "ALMA", "SSMA", "TMA"])
+aboveTrend = input.bool(false, title="Above Trend Only")
+Trend   = input.int(100, minval=1, title="Trend MA")
+basisTypeTrend   = input.string(defval = "EMA", title = "Trend MA Type: ", options=["SMA", "EMA", "DEMA", "TEMA", "WMA", "VWMA", "SMMA", "HullMA", "LSMA", "ALMA", "SSMA", "TMA"])
+
+RSILength  = input.int(34, minval=1, title="RSI EMA") // used to calculate RSI
+RSIFilter  = input.int(70, minval=1, title="RSI Filter") // only buy if its below this RSI - doesn't seem to work as expected
+// try different logic for buying
+StrategyNumber = input.int(1, minval=1, maxval=12, title="Strategy Number")  
+
+// put your api message in here before you set your alert
+LongMSG = input.string("", title="Long API Msg") 
+
+// take profit and stop loss
+takeProfitPerc = input.float(title="Long TP (%)", minval=0.0, step=0.1, defval=1) * 0.01
+longLossPerc = input.float(title="Long Stop Loss (%)", minval=0.0, step=0.1, defval=1) * 0.01
+
+offsetSigma = input.int(defval = 6, title = "Offset for LSMA / Sigma for ALMA", minval = 0)
+offsetALMA  = input.float(defval = 0.85, title = "Offset for ALMA", minval = 0, step = 0.01)
+
+
+rsi = ta.rsi(request.security(syminfo.tickerid, res, close[barstate.isrealtime ? 1 : 0]), RSILength)
+
+//calulates higher time frequency of close - for instance if you set 15 min time frame, gives you close series of 15 min
+htfClose = request.security(syminfo.tickerid, res, close[barstate.isrealtime ? 1 : 0])
+src = htfClose
+
+//use the input to set the long comment for the api
+if not(LongMSG ==  "")
+    openlongcomment := LongMSG
+
+
+//longCond = close > close[1] and close >= fLongEMA and close > open[1] and volume > volume[1]//and fLongEMA > fLongEMA[1] and fShortEMA > fShortEMA[1]
+
+//tp and sl price
+longTPPrice  = strategy.position_avg_price * (1 + takeProfitPerc)
+longStopPrice  = strategy.position_avg_price * (1 - longLossPerc)
+
+//highs and lows of the higher time frame
+htfHigh = request.security(syminfo.tickerid, res, high[barstate.isrealtime ? 1 : 0])
+htfLow = request.security(syminfo.tickerid, res, low[barstate.isrealtime ? 1 : 0])
+
+//not used anymore
+fPivot = ((htfHigh + htfLow + htfClose)/3)
+
+//calc higher time frame open and close
+htfOpen = request.security(syminfo.tickerid, res, open[barstate.isrealtime ? 1 : 0])
+htfVolume = request.security(syminfo.tickerid, res, volume[barstate.isrealtime ? 1 : 0])
+
+//Trigger Line - was originally used, but not currently used
+//TLine       = ta.ema(htfClose, TLineEMA)
+//TLineHTF = request.security(syminfo.tickerid, res, TLine[barstate.isrealtime ? 1 : 0])
+
+//short EMA in regular and highter time frame
+fShortEMA   = variant(basisTypeShort, close , ShortEMA, offsetSigma, offsetALMA)//ta.ema(close, ShortEMA)
+fShortEMAHTF = request.security(syminfo.tickerid, res, fShortEMA[barstate.isrealtime ? 1 : 0])
+
+//Med EMA in regular and highter time frame
+fMedEMA     = ta.ema(close, MedEMA)
+fMedEMAHTF = request.security(syminfo.tickerid, res, fMedEMA[barstate.isrealtime ? 1 : 0])
+
+//Long EMA in regular and highter time frame
+fLongEMA    = variant(basisTypeLong, close , LongEMA, offsetSigma, offsetALMA) //ta.ema(close, LongEMA)
+fLongEMAHTF = request.security(syminfo.tickerid, res, fLongEMA[barstate.isrealtime ? 1 : 0])
+//fLongEMAHTF = request.security(syminfo.tickerid, res, fLongEMA[barstate.isrealtime ? 1 : 0])
+//fLongEMAHTF = variant(basisTypeTrend, prefLongEMAHTF , LongEMA, offsetSigma, offsetALMA)
+
+fTrendEMA = ta.ema(close, Trend)
+prefTrendEMAHTF = request.security(syminfo.tickerid, res, fTrendEMA[barstate.isrealtime ? 1 : 0])
+fTrendEMAHTF = variant(basisTypeTrend, prefTrendEMAHTF , Trend, offsetSigma, offsetALMA)
+
+longCond = false
+//sets a default logic for opens just in case
+//longCond = htfClose > htfClose[2] and htfClose[1] < htfClose and htfClose < fShortEMA and rsi <= RSIFilter and fShortEMA < fLongEMA
+
+//placeholder for a checkbox
+checkTrend = false
+
+//assume that we are going to do the trade before we do a check
+doTrade = true
+
+if (aboveTrend ==true) // if above trend check is true - e.g. only trade above trend line
+    doTrade := close > fTrendEMAHTF //the close is above the trend line
+    
+    
+//use integer to determine different long opens to test them out
+if (StrategyNumber == 1 and doTrade==true) //if last close is greater than 2 ago, but
+    //longCond := ta.crossover(close[1],fTrendEMAHTF)
+    longCond := (htfClose > htfClose[2]) and (htfClose[1] < htfClose) and (htfClose < fShortEMA) and (rsi <= RSIFilter) and (fShortEMA < fLongEMA)
+
+else if (StrategyNumber == 2 and doTrade==true) // this  one also used
+    longCond := (htfClose > htfClose[2]) and (htfClose[1] > htfClose[2]) and (htfClose < fShortEMA) and (rsi <= RSIFilter) and (fShortEMA < fLongEMA)
+else if (StrategyNumber == 3 and doTrade==true) 
+    longCond := close > open and close > open[1] and fLongEMA > fLongEMA[1] and fShortEMA > fShortEMA[1]
+else if (StrategyNumber == 4 and doTrade==true ) //this one is being used by avax3s - 1hr 100% profitable - don't change
+    longCond := htfClose > htfClose[1] and ta.crossover(htfClose,fShortEMAHTF) and htfClose > htfOpen[1] and htfVolume > htfVolume[1] and rsi <= RSIFilter
+else if (StrategyNumber == 5 and doTrade==true ) 
+    longCond := close > close[1] and fLongEMA > fLongEMA[1] and fMedEMA[2] > fLongEMA[2] and fShortEMA > fShortEMA[1] //and close[1] > close[2]
+else if (StrategyNumber == 6 and doTrade==true )
+    longCond := htfClose > htfClose[1] and ta.crossover(htfClose,fShortEMAHTF) and rsi <= RSIFilter and fShortEMA < fLongEMA
+else if (StrategyNumber == 7 and doTrade==true ) //this one is used 
+    longCond := ta.crossover(htfClose,fShortEMAHTF) and fShortEMAHTF < fLongEMA
+else if (StrategyNumber == 8 and doTrade==true )
+    longCond := ta.crossover(close,fShortEMAHTF) and fShortEMAHTF < fLongEMA
+    //longCond := (ta.crossover(TLine, fMedEMA) and TLine > fShortEMA and TLine > fMedEMA and close > fLongEMA and close[1] > fLongEMA )// or ta.crossover(close,fShortEMA)
+else if (StrategyNumber == 9 and doTrade==true )
+    longCond := close > close[1] and fLongEMA > fLongEMA[1] and fMedEMA[2] > fLongEMA[2] and fShortEMA > fShortEMA[1] and close[1] > close[2]  // and close[1] > fLongEMA and fLongEMA > fLongEMA[1]
+else if (StrategyNumber == 10 and doTrade==true )
+    longCond := close > open and close < close[1] and fLongEMA > fLongEMA[1] and fShortEMA > fShortEMA[1]
+else if (StrategyNumber == 11 and doTrade==true)
+    longCond := (htfClose > fLongEMAHTF) //close is greater than fLong
+          and fShortEMAHTF > fTrendEMAHTF//  trending upward
+else if (StrategyNumber == 12 and doTrade==true)
+    longCond := ta.crossover(htfClose,fShortEMAHTF) and rsi <= RSIFilter //close is greater than fLong
+          //and fShortEMAHTF > fTrendEMAHTF//  trending upward
+
+//and htfClose,fShortEMAHTF)
+//and ta.crossover(htfClose,fShortEMAHTF) and rsi <= RSIFilter and fShortEMA < fLongEMA
+//
+
+//longCond = htfClose > htfClose[1] and ta.crossover(htfClose,fShortEMAHTF) and htfClose > htfOpen[1] and htfVolume > htfVolume[1] and rsi <= RSIFilter
+//== last one used
+//longCond = htfClose > htfClose[1] and ta.crossover(htfClose,fShortEMAHTF) and rsi <= RSIFilter and fShortEMA < fLongEMA
+//== last one used
+
+//and fLongEMA > fLongEMA[1] and fShortEMA > fShortEMA[1]
+//long closees higher than previous close.. and crossover higher time frequency with fShortEmaHTF and current close is higher then previous open (increasing) and volume is greater than previous volume
+
+//shortCond = close < open //and fShortEMA < fMedEMA (NOT BEING USED)
+shortCond   = ta.crossunder(fShortEMAHTF, fMedEMAHTF) and fShortEMAHTF > fMedEMAHTF and close <= longStopPrice // short condition not used in this strategy
+
+
+strategy.entry("long", strategy.long, when=longCond==true, comment=openlongcomment)//, stop=longStopPrice, limit=longTPPrice)
+strategy.close("long", when=shortCond==true,  comment=closelongcomment) //, loss = SL)
+
+// Submit exit orders based on calculated tp  price
+if (strategy.position_size > 0) and close > longTPPrice
+    strategy.exit(id="long", profit = longTPPrice, comment=closelongcomment)
+    
+// Submit exit orders based on calculated stop loss price
+if (strategy.position_size > 0) and close <= longStopPrice
+    strategy.exit(id="long", stop=longStopPrice, comment=closelongcomment)
+
+plot(htfClose, color=color.orange, title="HTFClose", linewidth=2)
+//plot(TLineHTF, color=color.fuchsia, title="T-Line EMA", linewidth=2)
+plot(fShortEMAHTF, color=color.blue, title="Short EMA", linewidth=2)
+plot(fMedEMAHTF, color=color.gray, title="Medium EMA", linewidth=2)
+plot(fLongEMAHTF, color=color.green, title="Long EMA", linewidth=2)
+plot(longStopPrice, color=color.white, title="StopPrice", linewidth=2)
+plot(fTrendEMAHTF, color=color.white, title="StopPrice", linewidth=2)
+//rsiStr = str.tostring(rsi[0])
+//plotshape(bar_index,color=color.gray, title="rsi", location = location.abovebar,text= rsiStr )
